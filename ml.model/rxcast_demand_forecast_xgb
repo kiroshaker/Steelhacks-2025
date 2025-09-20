@@ -1,13 +1,10 @@
-# rxcast_demand_forecast_xgb.py
-# Train & evaluate an XGBoost model on fabricated dataset
+# rxcast_demand_forecast_xgb_multistep.py
+# Train & evaluate an XGBoost model with lag features and 7-day multi-step forecasting
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error
-from sklearn.metrics import root_mean_squared_error
-from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 import xgboost as xgb
 
 # -------------------------------
@@ -29,13 +26,19 @@ df["month"] = df["timestamp"].dt.month
 # One-hot encode categorical variables
 df = pd.get_dummies(df, columns=["weather", "season"], drop_first=True)
 
-# Split features and target
-X = df.drop(columns=["qty.dispensed","date","time","timestamp"])
-y = df["qty.dispensed"]
+# Add lag features (previous 1, 7, 14 steps)
+for lag in [1, 7, 14]:
+    df[f"lag_{lag}"] = df["qty.dispensed"].shift(lag)
+
+# Drop rows with NaNs created by lagging
+df = df.dropna().reset_index(drop=True)
 
 # -------------------------------
 # 3. Train/Test Split
 # -------------------------------
+X = df.drop(columns=["qty.dispensed","date","time","timestamp"])
+y = df["qty.dispensed"]
+
 split_index = int(len(df) * 0.8)
 X_train, X_test = X.iloc[:split_index], X.iloc[split_index:]
 y_train, y_test = y.iloc[:split_index], y.iloc[split_index:]
@@ -45,11 +48,11 @@ time_test = df["timestamp"].iloc[split_index:]
 # 4. Train XGBoost Model
 # -------------------------------
 xgb_model = xgb.XGBRegressor(
-    n_estimators=500,        # number of boosting rounds
-    learning_rate=0.05,      # shrinkage step
-    max_depth=6,             # tree depth
-    subsample=0.8,           # row sampling
-    colsample_bytree=0.8,    # feature sampling
+    n_estimators=500,
+    learning_rate=0.05,
+    max_depth=6,
+    subsample=0.8,
+    colsample_bytree=0.8,
     objective="reg:squarederror",
     random_state=42,
     n_jobs=-1
@@ -58,7 +61,7 @@ xgb_model = xgb.XGBRegressor(
 xgb_model.fit(X_train, y_train)
 
 # -------------------------------
-# 5. Evaluate
+# 5. Evaluate One-Step Predictions
 # -------------------------------
 preds = xgb_model.predict(X_test)
 
@@ -84,7 +87,6 @@ plt.show()
 # -------------------------------
 # 6B. Plot Results (Full Year)
 # -------------------------------
-# Predict on ALL data
 all_preds = xgb_model.predict(X)
 
 plt.figure(figsize=(14,6))
@@ -100,5 +102,53 @@ plt.show()
 # -------------------------------
 # 7. Feature Importance
 # -------------------------------
-xgb.plot_importance(xgb_model, max_num_features=10, height=0.5)
+xgb.plot_importance(xgb_model, max_num_features=12, height=0.5)
 plt.show()
+
+# -------------------------------
+# 8. Multi-Step Forecast (7 days ahead)
+# -------------------------------
+def forecast_multi_step(model, df_last, steps=7):
+    """Recursive 7-step forecast using lag features"""
+    forecasts = []
+    last_known = df_last.copy()
+
+    for _ in range(steps):
+        X_input = last_known.drop(columns=["qty.dispensed","date","time","timestamp"], errors="ignore").iloc[[-1]]
+        y_pred = model.predict(X_input)[0]
+        forecasts.append(y_pred)
+
+        # shift lags forward manually
+        new_row = last_known.iloc[[-1]].copy()
+        new_row["qty.dispensed"] = y_pred
+        for lag in [1, 7, 14]:
+            new_row[f"lag_{lag}"] = last_known["qty.dispensed"].iloc[-lag]
+        last_known = pd.concat([last_known, new_row], ignore_index=True)
+
+    return forecasts
+
+# Use last part of full dataframe as seed
+seed_df = df.copy()
+future_forecasts = forecast_multi_step(xgb_model, seed_df, steps=7)
+
+print("\n7-Day Forecast:")
+for i, val in enumerate(future_forecasts, 1):
+    print(f"Day +{i}: {val:.1f}")
+
+# -------------------------------
+# 9. Plot Forecast Horizon
+# -------------------------------
+plt.figure(figsize=(12,6))
+plt.plot(df["timestamp"].iloc[-100:], df["qty.dispensed"].iloc[-100:], 
+         label="Actual (last 100 steps)", color="blue")
+future_dates = pd.date_range(start=df["timestamp"].iloc[-1] + pd.Timedelta(hours=6), 
+                             periods=7, freq="6H")
+plt.plot(future_dates, future_forecasts, "ro-", label="7-Step Forecast")
+plt.xlabel("Date")
+plt.ylabel("Qty Dispensed")
+plt.title("7-Step Multi-Step Forecast with XGBoost + Lag Features")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# -------------------------------
