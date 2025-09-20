@@ -5,14 +5,15 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import root_mean_squared_error
 from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
 
 # -------------------------------
 # 1. Load dataset
 # -------------------------------
-df = pd.read_csv("fabricated_pharmacy_dataset_year.csv")
+df = pd.read_csv("fabricated_pharmacy_dataset_year_updated.csv")
 
 # Combine date + time into a single timestamp
 df["timestamp"] = pd.to_datetime(df["date"] + " " + df["time"])
@@ -62,20 +63,36 @@ xgb_model.fit(X_train, y_train)
 preds = xgb_model.predict(X_test)
 
 mae = mean_absolute_error(y_test, preds)
-rmse = mean_squared_error(y_test, preds, squared=False)
+rmse = root_mean_squared_error(y_test, preds)
 
 print(f"XGBoost MAE: {mae:.2f}")
 print(f"XGBoost RMSE: {rmse:.2f}")
 
 # -------------------------------
-# 6. Plot Results
+# 6A. Plot Results (Test Period Only)
 # -------------------------------
 plt.figure(figsize=(12,6))
-plt.plot(time_test, y_test.values, label="Actual", color="blue")
-plt.plot(time_test, preds, label="Predicted", color="orange", alpha=0.7)
+plt.plot(time_test, y_test.values, label="Actual (Test)", color="blue")
+plt.plot(time_test, preds, label="Predicted (Test)", color="orange", alpha=0.7)
 plt.xlabel("Date")
 plt.ylabel("Qty Dispensed")
-plt.title("XGBoost Forecast: Actual vs Predicted Medication Demand")
+plt.title("XGBoost Forecast: Test Period (Last 20% of Year)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# -------------------------------
+# 6B. Plot Results (Full Year)
+# -------------------------------
+# Predict on ALL data
+all_preds = xgb_model.predict(X)
+
+plt.figure(figsize=(14,6))
+plt.plot(df["timestamp"], y, label="Actual (Full Year)", color="blue")
+plt.plot(df["timestamp"], all_preds, label="Predicted (Full Year)", color="red", alpha=0.6)
+plt.xlabel("Date")
+plt.ylabel("Qty Dispensed")
+plt.title("XGBoost Forecast: Full Year (2024)")
 plt.legend()
 plt.tight_layout()
 plt.show()
