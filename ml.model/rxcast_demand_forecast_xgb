@@ -1,5 +1,5 @@
-# rxcast_demand_forecast_xgb_multistep.py
-# Train & evaluate an XGBoost model with lag features and 7-day multi-step forecasting
+# rxcast_demand_forecast_xgb_full.py
+# Train XGBoost with lag features and generate multiple forecast plots
 
 import pandas as pd
 import numpy as np
@@ -72,14 +72,14 @@ print(f"XGBoost MAE: {mae:.2f}")
 print(f"XGBoost RMSE: {rmse:.2f}")
 
 # -------------------------------
-# 6A. Plot Results (Test Period Only)
+# 6A. Plot Results (Test Period ~ Last 2 Months)
 # -------------------------------
 plt.figure(figsize=(12,6))
 plt.plot(time_test, y_test.values, label="Actual (Test)", color="blue")
 plt.plot(time_test, preds, label="Predicted (Test)", color="orange", alpha=0.7)
 plt.xlabel("Date")
 plt.ylabel("Qty Dispensed")
-plt.title("XGBoost Forecast: Test Period (Last 20% of Year)")
+plt.title("XGBoost Forecast: Test Period (Last 20% of Year ~ 2 Months)")
 plt.legend()
 plt.tight_layout()
 plt.show()
@@ -103,50 +103,96 @@ plt.show()
 # 7. Feature Importance
 # -------------------------------
 xgb.plot_importance(xgb_model, max_num_features=12, height=0.5)
+plt.title("Feature Importance")
 plt.show()
 
 # -------------------------------
-# 8. Multi-Step Forecast (7 days ahead)
+# 8. Build Future Exogenous Frame (repeat last 7 days)
 # -------------------------------
-def forecast_multi_step(model, df_last, steps=7):
-    """Recursive 7-step forecast using lag features"""
-    forecasts = []
-    last_known = df_last.copy()
+steps = 28  # 7 days * 4 steps/day
+exog_future = df.tail(steps).copy()
 
-    for _ in range(steps):
-        X_input = last_known.drop(columns=["qty.dispensed","date","time","timestamp"], errors="ignore").iloc[[-1]]
-        y_pred = model.predict(X_input)[0]
-        forecasts.append(y_pred)
+# advance timestamps into the future
+exog_future["timestamp"] = pd.date_range(
+    start=df["timestamp"].iloc[-1] + pd.Timedelta(hours=6),
+    periods=steps, freq="6H"
+)
+exog_future["date"] = exog_future["timestamp"].dt.strftime("%Y-%m-%d")
+exog_future["time"] = exog_future["timestamp"].dt.strftime("%H:%M")
+exog_future["dayofweek"] = exog_future["timestamp"].dt.dayofweek
+exog_future["hour"] = exog_future["timestamp"].dt.hour
+exog_future["month"] = exog_future["timestamp"].dt.month
 
-        # shift lags forward manually
-        new_row = last_known.iloc[[-1]].copy()
-        new_row["qty.dispensed"] = y_pred
+# placeholder lags
+for lag in [1, 7, 14]:
+    exog_future[f"lag_{lag}"] = np.nan
+
+feature_cols = X.columns  # keep training feature order
+
+# -------------------------------
+# 9. Recursive Forecast Function
+# -------------------------------
+def forecast_multi_step_with_exog(model, hist_df, future_exog, feature_cols):
+    last_known = hist_df.copy()
+    preds = []
+
+    for i in range(len(future_exog)):
+        row = future_exog.iloc[[i]].copy()
+
+        # fill lag features
         for lag in [1, 7, 14]:
-            new_row[f"lag_{lag}"] = last_known["qty.dispensed"].iloc[-lag]
-        last_known = pd.concat([last_known, new_row], ignore_index=True)
+            row[f"lag_{lag}"] = last_known["qty.dispensed"].iloc[-lag]
 
-    return forecasts
+        # align with training features
+        X_row = row.reindex(columns=feature_cols, fill_value=0)
 
-# Use last part of full dataframe as seed
-seed_df = df.copy()
-future_forecasts = forecast_multi_step(xgb_model, seed_df, steps=7)
+        y_pred = model.predict(X_row)[0]
+        preds.append(y_pred)
 
-print("\n7-Day Forecast:")
-for i, val in enumerate(future_forecasts, 1):
+        # update last_known
+        full_row = row.copy()
+        full_row["qty.dispensed"] = y_pred
+        last_known = pd.concat([last_known, full_row[last_known.columns]], ignore_index=True)
+
+    return np.array(preds)
+
+# 6-hourly forecasts
+step_forecasts = forecast_multi_step_with_exog(
+    xgb_model, df.copy(), exog_future.copy(), feature_cols
+)
+
+# convert 6-hourly → daily totals
+daily_forecasts = step_forecasts.reshape(-1, 4).sum(axis=1)
+
+print("\n7-Day Forecast (Daily Totals):")
+for i, val in enumerate(daily_forecasts, 1):
     print(f"Day +{i}: {val:.1f}")
 
 # -------------------------------
-# 9. Plot Forecast Horizon
+# 10. Plot Actual vs Forecast (Daily Totals)
 # -------------------------------
+# actual daily totals (last 14 days)
+last_14d = df.loc[df["timestamp"] >= df["timestamp"].max() - pd.Timedelta(days=14)].copy()
+last_14d["date_only"] = last_14d["timestamp"].dt.date
+actual_daily = (last_14d.groupby("date_only")["qty.dispensed"]
+                .sum()
+                .reset_index())
+actual_daily["date_only"] = pd.to_datetime(actual_daily["date_only"])
+
+# forecast dates
+future_days = pd.date_range(
+    start=actual_daily["date_only"].max() + pd.Timedelta(days=1),
+    periods=7, freq="D"
+)
+
+# plot
 plt.figure(figsize=(12,6))
-plt.plot(df["timestamp"].iloc[-100:], df["qty.dispensed"].iloc[-100:], 
-         label="Actual (last 100 steps)", color="blue")
-future_dates = pd.date_range(start=df["timestamp"].iloc[-1] + pd.Timedelta(hours=6), 
-                             periods=7, freq="6H")
-plt.plot(future_dates, future_forecasts, "ro-", label="7-Step Forecast")
+plt.plot(actual_daily["date_only"], actual_daily["qty.dispensed"],
+         label="Actual (Daily Totals, last 14 days)", color="blue")
+plt.plot(future_days, daily_forecasts, "ro-", label="7-Day Forecast (Daily Totals)")
 plt.xlabel("Date")
-plt.ylabel("Qty Dispensed")
-plt.title("7-Step Multi-Step Forecast with XGBoost + Lag Features")
+plt.ylabel("Qty Dispensed (per day)")
+plt.title("7-Day Forecast (Daily Totals) with XGBoost + Lag Features")
 plt.legend()
 plt.tight_layout()
 plt.show()
