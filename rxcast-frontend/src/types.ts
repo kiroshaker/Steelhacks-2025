@@ -10,7 +10,7 @@ export type InventoryItem = {
 };
 
 export type ForecastPoint = {
-  date: string;  // "YYYY-MM-DD"
+  date: string;
   p05: number;
   p50: number;
   p95: number;
