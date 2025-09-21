@@ -29,4 +29,3 @@ export default function ForecastChart({ data }: { data: ForecastPoint[] }) {
         </div>
     );
 }
-
