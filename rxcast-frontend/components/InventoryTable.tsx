@@ -57,7 +57,7 @@
                         <tr>
                             <th className = "text-left p-2">Drug</th>
                             <th className = "text-right p-2">On-hand</th>
-                            <th className = "text-right p-2">Pred 14d (p50)</th>
+                            <th className = "text-right p-2">Pred 7d</th>
                             <th className = "text-right p-2">Lead time (d)</th>
                             <th className = "text-center p-2">Risk</th>
                             <th className = "text-right p-2">Suggested PO</th>
@@ -94,10 +94,15 @@
                                         </span>
                                     )}
                                 </td>
-                                <td className = "p-2 text-right">{it.suggested_po_qty}</td>
+                                <td className = "p-2 text-right">
+                                    {it.suggested_po_qty > 0 ? it.suggested_po_qty.toLocaleString() : "-"}
+                                    {it.risk && it.suggested_po_qty > 0 && (
+                                        <div className="text-xs text-gray-500">suggested to cover demand + buffer</div>
+                                    )}
+                                </td>
                                 <td className = "p-2 text-right">
                                     <button
-                                        className="px-3 py-1 rounded bg-black text-white disabled:opacity-40"
+                                        className="px-3 py-1 rounded border bg-white text-gray-900 disabled:opacity-40"
                                         onClick = {() => approve(it.ndc, it.suggested_po_qty)}
                                         disabled = {it.suggested_po_qty <= 0}
                                     >
