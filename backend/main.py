@@ -50,9 +50,27 @@ class PredictionResponse(BaseModel):
     suggested_po_qty: int
     at_risk: bool
 
-# --- 2. Connector Functions ---
+# --- 2. Connector Functions --
 
-# Removed openFDA shortage-checking calls — keeping backend focused on weather + model forecasting.
+def get_fda_shortage_status() -> str:
+    """Checks the openFDA API for Oseltamivir's shortage status."""
+    TAMIFLU_GENERIC_NAME = "Oseltamivir Phosphate"
+    API_ENDPOINT = "https://api.fda.gov/drug/shortages.json"
+    search_query = f'generic_name:"{TAMIFLU_GENERIC_NAME}"'
+    url = f'{API_ENDPOINT}?search={search_query}&limit=50'
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        print(response)
+        data = response.json()
+        print(data)
+        if "results" in data and len(data["results"]) > 0:
+            return "Currently in Shortage"
+        else:
+            return "Normal"
+    except requests.exceptions.RequestException as e:
+        print(f"ERROR: Could not connect to FDA API: {e}")
+        return "API Error"
 
 def get_weather_forecast() -> list:
     """
@@ -61,7 +79,6 @@ def get_weather_forecast() -> list:
     """
     API_KEY = os.getenv("OPENWEATHERMAP_API_KEY")
     
-    # Use the free-tier 5-day forecast endpoint
     API_ENDPOINT = "https://api.openweathermap.org/data/2.5/forecast"
     
     PITTSBURGH_LAT, PITTSBURGH_LON = 40.4406, -79.9959
